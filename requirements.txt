@@ -1,0 +1,10 @@
+torch>=2.4
+transformers>=4.45
+numpy>=1.26
+Pillow>=10.0
+PyYAML>=6.0
+tqdm>=4.66
+pandas>=2.1
+matplotlib>=3.8
+seaborn>=0.13
+jupyter>=1.0
