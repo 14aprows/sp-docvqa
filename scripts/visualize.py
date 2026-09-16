@@ -28,12 +28,12 @@ def parse_args():
     parser.add_argument(
         "--predictions",
         type=str,
-        default="outputs/evaluation/layoutlmv3_spdocvqa/error_cases.json"
+        default="outputs/evaluation/layoutlmv3/error_cases.json"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/visualizations/layoutlmv3_spdocvqa"
+        default="outputs/visualizations/layoutlmv3"
     )
     parser.add_argument(
         "--category",
@@ -98,14 +98,22 @@ def main():
         question_id = prediction.get("question_id", index)
         filename = f"{index:04d}_{safe_filename(question_id)}.png"
         ground_truth_answers = prediction.get("ground_truth_answers", [""])
+        pseudo_ground_truth_boxes = prediction.get(
+            "pseudo_ground_truth_boxes_normalized",
+            [],
+        )
 
         visualize_prediction(
             image_path=str(resolve_path(prediction["image_path"])),
-            predicted_bbox=prediction["predicted_bbox"],
+            predicted_bbox=prediction["predicted_bbox_normalized"],
             predicted_answer=prediction["predicted_answer"],
             question=prediction["question"],
             output_path=str(category_dir / filename),
-            ground_truth_bbox=prediction["ground_truth_bbox"],
+            ground_truth_bbox=(
+                pseudo_ground_truth_boxes[0]
+                if pseudo_ground_truth_boxes
+                else None
+            ),
             ground_truth_answer=ground_truth_answers[0] if ground_truth_answers else ""
         )
 
