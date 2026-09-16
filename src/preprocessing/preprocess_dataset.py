@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image
 
 from src.data.ocr_loader import load_ocr
-from src.preprocessing.answer_matching import match_answer
+from src.preprocessing.answer_matching import match_answers
 from src.preprocessing.bbox_normalization import normalize_box
 from src.preprocessing.sliding_window import create_word_windows
 
@@ -33,7 +33,7 @@ def get_records(payload):
 def get_question(record):
     return str(record.get("question") or record.get("questions") or "").strip()
 
-def get_answer(record):
+def get_answers(record):
     value = record.get("answer") or record.get("answers") or []
     if isinstance(value, str):
         value = [value]
@@ -62,20 +62,80 @@ def build_file_index(directory, patterns):
 
     return file_index
 
-def get_candidate_names(record):
+def find_file(file_index, record):
     candidates = [get_doc_id(record).lower()]
     image_name = record.get("image") or record.get("image_name")
     if image_name:
         candidates.append(Path(str(image_name)).stem.lower())
-    return list(dict.fromkeys(candidates))
 
-def find_file(file_index, record):
-    candidates = get_candidate_names(record)
-    for candidate in candidates:
+    for candidate in dict.fromkeys(candidates):
         if candidate in file_index:
             return file_index[candidate]
 
     return None
+
+def normalize_candidates(candidates, image_width, image_height):
+    normalized_candidates = []
+    for candidate in candidates:
+        normalized_candidate = dict(candidate)
+        normalized_candidate["box_pixel"] = candidate["box"]
+        normalized_candidate["box_normalized"] = normalize_box(
+            box=candidate["box"],
+            image_width=image_width,
+            image_height=image_height,
+            target_size=1000
+        )
+        normalized_candidates.append(normalized_candidate)
+
+    return normalized_candidates
+
+def create_processed_record(
+    window,
+    question_id,
+    doc_id,
+    split,
+    question_types,
+    image_path,
+    image_width,
+    image_height,
+    question,
+    answers,
+    document_candidates
+):
+    best_candidate = document_candidates[0]
+    best_window_candidate = window["candidate_spans"][0] if window["candidate_spans"] else None
+
+    return {
+        "id": f"{question_id}_window_{window['window_index']}",
+        "question_id": question_id,
+        "doc_id": doc_id,
+        "split": split,
+        "question_types": question_types,
+        "image_path": image_path,
+        "image_width": image_width,
+        "image_height": image_height,
+        "question": question,
+        "answers": answers,
+        "window_index": window["window_index"],
+        "window_start": window["window_start"],
+        "window_end": window["window_end"],
+        "contains_answer": window["contains_answer"],
+        "words": window["words"],
+        "boxes": window["boxes"],
+        "confidence_labels": window["confidence_labels"],
+        "candidate_spans": window["candidate_spans"],
+        "candidate_count": len(window["candidate_spans"]),
+        "answer_start_word": window["answer_start_word"],
+        "answer_end_word": window["answer_end_word"],
+        "matched_answer": best_window_candidate["answer"] if best_window_candidate else None,
+        "best_window_candidate": best_window_candidate,
+        "best_candidate": best_candidate,
+        "is_ambiguous": len(document_candidates) > 1,
+        "best_candidate_pseudo_ground_truth_box_pixel": best_candidate["box_pixel"],
+        "best_candidate_pseudo_ground_truth_box_normalized": best_candidate["box_normalized"],
+        "candidate_pseudo_ground_truth_boxes_pixel": [candidate["box_pixel"] for candidate in document_candidates],
+        "candidate_pseudo_ground_truth_boxes_normalized": [candidate["box_normalized"] for candidate in document_candidates]
+    }
 
 def preprocess_split(
     project_root,
@@ -86,7 +146,12 @@ def preprocess_split(
     split,
     max_words=300,
     stride=80,
-    positive_only=True
+    positive_only=True,
+    fuzzy_threshold=0.85,
+    span_tolerance=2,
+    max_answer_words=15,
+    max_candidates=20,
+    low_confidence_penalty=0.2
 ):
     project_root = Path(project_root).resolve()
     annotation_path = Path(annotation_path)
@@ -94,14 +159,14 @@ def preprocess_split(
     ocr_dir = Path(ocr_dir)
     output_path = Path(output_path)
 
-    annotation_payload = load_json(annotation_path)
-    records = get_records(annotation_payload)
+    records = get_records(load_json(annotation_path))
     image_index = build_file_index(image_dir, ["*.jpg", "*.jpeg", "*.png"])
     ocr_index = build_file_index(ocr_dir, ["*.json"])
 
     processed_records = []
     report = {
         "split": split,
+        "positive_only": positive_only,
         "total_questions": len(records),
         "missing_images": 0,
         "missing_ocr": 0,
@@ -109,9 +174,11 @@ def preprocess_split(
         "empty_answers": 0,
         "empty_ocr": 0,
         "answer_not_matched": 0,
-        "no_positive_windows": 0,
+        "no_output_windows": 0,
         "processed_questions": 0,
-        "generated_windows": 0
+        "generated_windows": 0,
+        "generated_candidates": 0,
+        "ambiguous_questions": 0
     }
 
     error_examples = {
@@ -124,11 +191,13 @@ def preprocess_split(
         question_id = get_question_id(record, fallback=f"{split}-{record_index}")
         current_record_id = get_doc_id(record)
         question = get_question(record)
-        answer_candidates = get_answer(record)
+        answers = get_answers(record)
+
         if not question:
             report["empty_questions"] += 1
             continue
-        if not answer_candidates:
+
+        if not answers:
             report["empty_answers"] += 1
             continue
 
@@ -155,18 +224,20 @@ def preprocess_split(
         with Image.open(image_path) as image:
             image_width, image_height = image.size
 
-        ocr_data = load_ocr(ocr_path)
-        ocr_words = ocr_data["words"]
-
+        ocr_words = load_ocr(ocr_path)["words"]
         if not ocr_words:
             report["empty_ocr"] += 1
             continue
 
-        match_result = match_answer(
+        match_result = match_answers(
             words=ocr_words,
-            answer_candidates=answer_candidates
+            answer_candidates=answers,
+            fuzzy_threshold=fuzzy_threshold,
+            span_tolerance=span_tolerance,
+            max_answer_words=max_answer_words,
+            max_candidates=max_candidates,
+            low_confidence_penalty=low_confidence_penalty
         )
-
         if not match_result["matched"]:
             report["answer_not_matched"] += 1
             if len(error_examples["answer_not_matched"]) < 10:
@@ -174,11 +245,12 @@ def preprocess_split(
                     "question_id": question_id,
                     "doc_id": current_record_id,
                     "question": question,
-                    "answers": answer_candidates
+                    "answers": answers
                 })
             continue
 
         words = [word["text"] for word in ocr_words]
+        confidence_labels = [word.get("confidence_label") for word in ocr_words]
         normalized_boxes = [
             normalize_box(
                 box=word["box"],
@@ -188,65 +260,53 @@ def preprocess_split(
             )
             for word in ocr_words
         ]
-
-        answer_start_word = min(match_result["word_indices"])
-        answer_end_word = max(match_result["word_indices"])
-        normalized_answer_box = normalize_box(
-            box=match_result["box"],
-            image_width=image_width,
-            image_height=image_height,
-            target_size=1000
+        document_candidates = normalize_candidates(
+            match_result["candidates"],
+            image_width,
+            image_height
         )
 
         windows = create_word_windows(
             words=words,
             boxes=normalized_boxes,
-            answer_start_word=answer_start_word,
-            answer_end_word=answer_end_word,
+            confidence_labels=confidence_labels,
+            answer_candidates=document_candidates,
             max_words=max_words,
             stride=stride,
             positive_only=positive_only
         )
 
         if not windows:
-            report["no_positive_windows"] += 1
+            report["no_output_windows"] += 1
             continue
 
         relative_image_path = image_path.resolve().relative_to(project_root).as_posix()
-
+        question_types = get_question_types(record)
         for window in windows:
-            processed_record = {
-                "id": f"{question_id}_window_{window['window_index']}",
-                "question_id": question_id,
-                "doc_id": current_record_id,
-                "split": split,
-                "question_types": get_question_types(record),
-                "image_path": relative_image_path,
-                "image_width": image_width,
-                "image_height": image_height,
-                "question": question,
-                "answers": answer_candidates,
-                "matched_answer": match_result["answer"],
-                "answer_box_pixel": match_result["box"],
-                "answer_box_normalized": normalized_answer_box,
-                "window_index": window["window_index"],
-                "window_start": window["window_start"],
-                "window_end": window["window_end"],
-                "contains_answer": window["contains_answer"],
-                "words": window["words"],
-                "boxes": window["boxes"],
-                "answer_start_word": window["answer_start_word"],
-                "answer_end_word": window["answer_end_word"]
-            }
-            processed_records.append(processed_record)
+            processed_records.append(
+                create_processed_record(
+                    window=window,
+                    question_id=question_id,
+                    doc_id=current_record_id,
+                    split=split,
+                    question_types=question_types,
+                    image_path=relative_image_path,
+                    image_width=image_width,
+                    image_height=image_height,
+                    question=question,
+                    answers=answers,
+                    document_candidates=document_candidates
+                )
+            )
 
         report["processed_questions"] += 1
         report["generated_windows"] += len(windows)
+        report["generated_candidates"] += len(document_candidates)
+        report["ambiguous_questions"] += int(len(document_candidates) > 1)
 
-    if report["total_questions"] > 0:
-        report["processed_percentage"] = report["processed_questions"] / report["total_questions"] * 100
-    else:
-        report["processed_percentage"] = 0.0
+    report["processed_percentage"] = (
+        report["processed_questions"] / report["total_questions"] * 100 if report["total_questions"] else 0.0
+    )
 
     output_payload = {
         "dataset": "SP-DocVQA",
@@ -254,6 +314,11 @@ def preprocess_split(
         "max_words": max_words,
         "stride": stride,
         "positive_only": positive_only,
+        "fuzzy_threshold": fuzzy_threshold,
+        "span_tolerance": span_tolerance,
+        "max_answer_words": max_answer_words,
+        "max_candidates": max_candidates,
+        "low_confidence_penalty": low_confidence_penalty,
         "report": report,
         "error_examples": error_examples,
         "data": processed_records
