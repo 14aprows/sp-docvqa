@@ -1,0 +1,55 @@
+pipeline:
+  name: Question-Conditioned OCR Confidence Adaptation with Confidence-Weighted Multi-Candidate Supervision for SP-DocVQA Answer Localization
+
+data:
+  train_annotation_path: data/samples/annotations/train_sample.json
+  val_annotation_path: data/samples/annotations/val_sample.json
+  train_image_dir: data/samples/images/train
+  val_image_dir: data/samples/images/val
+  train_ocr_dir: data/samples/ocr/train
+  val_ocr_dir: data/samples/ocr/val
+  train_path: data/processed/train_sample.json
+  val_path: data/processed/val_sample.json
+  val_eval_path: data/processed/val_eval_sample.json
+
+preprocessing:
+  max_words: 180
+  stride: 80
+  fuzzy_threshold: 0.85
+  span_tolerance: 2
+  max_answer_words: 15
+  max_candidates: 20
+  low_confidence_penalty: 0.20
+
+model:
+  pretrained_model: microsoft/layoutlmv3-base
+  max_length: 512
+  adapter_size: 256
+  confidence_size: 32
+  dropout: 0.1
+
+training:
+  output_dir: outputs/checkpoints/layoutlmv3
+  resume_from: null
+  seed: 42
+  epochs: 10
+  train_batch_size: 2
+  val_batch_size: 2
+  gradient_accumulation_steps: 4
+  backbone_learning_rate: 0.00001
+  new_layers_learning_rate: 0.00005
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  max_grad_norm: 1.0
+  mixed_precision: true
+  num_workers: 0
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.001
+
+inference:
+  max_answer_tokens: 30
+  top_k: 20
+
+evaluation:
+  checkpoint_path: outputs/checkpoints/layoutlmv3/best
+  output_dir: outputs/evaluation/layoutlmv3
