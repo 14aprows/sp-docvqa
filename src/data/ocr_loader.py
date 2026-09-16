@@ -46,36 +46,51 @@ def polygon_to_box(polygon):
         float(max(y_values))
     ]
 
+def create_word_create(
+    word,
+    line_index,
+    word_index
+):
+    text = str(word.get("text") or word.get("content") or "").strip()
+    polygon = word.get("boundingBox") or word.get("polygon") or []
+    box = polygon_to_box(polygon)
+    if not text or box is None:
+        return None
+
+    confidence = word.get("confidence")
+    confidence_label = None if confidence is None else str(confidence).strip() or None
+    return {
+        "text": text,
+        "box": box,
+        "line_index": line_index,
+        "word_index": word_index,
+        "confidence_label": confidence_label
+    }
+
 def extract_page_words(page):
     words = []
-
-    lines = page.get("lines", [])
-    for line_index, line in enumerate(lines):
+    for line_index, line in enumerate(page.get("lines", [])):
         for word_index, word in enumerate(line.get("words", [])):
-            text = str(word.get("text") or word.get("content") or "").strip()
-            polygon = word.get("boundingBox") or word.get("polygon") or []
-            box = polygon_to_box(polygon)
-            if text and box:
-                words.append({
-                    "text": text,
-                    "box": box,
-                    "line_index": line_index,
-                    "word_index": word_index
-                })
+            word_record = create_word_create(
+                word,
+                line_index,
+                word_index
+            )
+            if word_record is not None:
+                words.append(word_record)
 
-    if not words:
+        if words:
+            return words
+
         for word_index, word in enumerate(page.get("words", [])):
-            text = str(word.get("text") or word.get("content") or "").strip()
-            polygon = word.get("boundingBox") or word.get("polygon") or []
-            box = polygon_to_box(polygon)
-            if text and box:
-                words.append({
-                    "text": text,
-                    "box": box,
-                    "line_index": None,
-                    "word_index": word_index
-                })
-
+            word_record = create_word_create(
+                word,
+                None,
+                word_index
+            )
+            if word_record is not None:
+                words.append(word_record)
+                
     return words
 
 def load_ocr(path):
