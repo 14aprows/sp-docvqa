@@ -18,12 +18,12 @@ def parse_args():
     parser.add_argument(
         "--predictions",
         type=str,
-        default="outputs/evaluation/layoutlmv3_spdocvqa/predictions.json"
+        default="outputs/evaluation/layoutlmv3/predictions_per_question.json"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/evaluation/layoutlmv3_spdocvqa"
+        default="outputs/evaluation/layoutlmv3"
     )
     parser.add_argument(
         "--iou-threshold",

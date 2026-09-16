@@ -46,8 +46,11 @@ def analyze_errors(
         categorized_predictions.append(enriched_prediction)
         category_counter[category] += 1
 
-        question_type = prediction.get("question_type", "unknown")
-        type_statistics[question_type][category] += 1
+        question_types = prediction.get("question_types") or ["unknown"]
+        if isinstance(question_types, str):
+            question_types = [question_types]
+        for question_type in question_types:
+            type_statistics[str(question_type)][category] += 1
 
     total = len(categorized_predictions)
     category_percentages = {
