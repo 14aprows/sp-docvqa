@@ -1,342 +1,166 @@
-import argparse
-import json
+import math
 import random
 import sys
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import torch
-from torch.nn.utils import clip_grad_norm_
+import yaml
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
-from tqdm import tqdm
-from transformers import AutoProcessor
+from transformers import AutoProcessor, get_linear_schedule_with_warmup
 
 ROOT = Path(__file__).resolve().parents[1]
-
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.collator import LayoutLMv3QACollator
 from src.data.dataset import SPDocVQADataset
 from src.models.model import build_model
+from src.training.trainer import LayoutLMv3Trainer
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Smoke training LayoutLMv3 untuk SP-DocVQA."
-    )
-    parser.add_argument(
-        "--train-data",
-        type=str,
-        default="data/processed/train_sample.json"
-    )
-    parser.add_argument(
-        "--val-data",
-        type=str,
-        default="data/processed/val_sample.json"
-    )
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default="microsoft/layoutlmv3-base"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="outputs/checkpoints/smoke_training"
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=1
-    )
-    parser.add_argument(
-        "--max-length",
-        type=int,
-        default=512
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=10,
-        help="Jumlah optimizer update untuk smoke training."
-    )
-    parser.add_argument(
-        "--gradient-accumulation-steps",
-        type=int,
-        default=4
-    )
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        default=5e-5
-    )
-    parser.add_argument(
-        "--weight-decay",
-        type=float,
-        default=0.01
-    )
-    parser.add_argument(
-        "--max-grad-norm",
-        type=float,
-        default=1.0
-    )
-    parser.add_argument(
-        "--validation-batches",
-        type=int,
-        default=5
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42
-    )
-
-    return parser.parse_args()
-
-def resolve_path(path_value: str) -> Path:
+def resolve_path(path_value):
     path = Path(path_value)
+    return path if path.is_absolute() else ROOT / path
 
-    if path.is_absolute():
-        return path
+def load_config(path_value):
+    path = resolve_path(path_value)
+    if not path.exists():
+        raise FileNotFoundError(f"Config tidak ditemukan: {path}")
+    with path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
+    if not isinstance(config, dict):
+        raise ValueError(f"Config tidak valid: {path}")
+    return config
 
-    return ROOT / path
-
-def set_seed(seed: int):
+def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-def move_batch_to_device(
-    batch: Dict[str, torch.Tensor],
-    device: torch.device
-) -> Dict[str, torch.Tensor]:
-    return {
-        key: value.to(device)
-        for key, value in batch.items()
-    }
-
-def inspect_dataset(dataset: SPDocVQADataset):
-    sample = dataset.inspect_item(0)
-
-    print("\n" + "=" * 60)
-    print("INSPEKSI SATU SAMPEL")
-    print("=" * 60)
-    print("Question ID:", sample["question_id"])
-    print("Question:", sample["question"])
-    print("Ground truth:", sample["answer"])
-    print("Jawaban dari OCR:", sample["answer_text_from_words"])
-    print("Word span:", sample["answer_start_word"], "-", sample["answer_end_word"])
-    print("Token span:", sample["start_token"], "-", sample["end_token"])
-    print("Answer tokens:", sample["answer_tokens"])
-    print("Image:", sample["image_path"])
-    print("\nTensor shapes:")
-
-    for key, shape in sample["tensor_shapes"].items():
-        print(f"  {key:18s}: {shape}")
-
-    print("=" * 60 + "\n")
-
-@torch.no_grad()
-def validate(
-    model,
-    data_loader,
-    device,
-    maximum_batches: int
-) -> float:
-    model.eval()
-
-    total_loss = 0.0
-    batch_count = 0
-
-    for batch_index, batch in enumerate(data_loader):
-        if batch_index >= maximum_batches:
-            break
-
-        batch = move_batch_to_device(batch, device)
-        outputs = model(**batch)
-
-        total_loss += outputs.loss.item()
-        batch_count += 1
-
-    if batch_count == 0:
-        raise ValueError("Tidak ada batch validation.")
-
-    return total_loss / batch_count
-
-def main():
-    args = parse_args()
-
-    set_seed(args.seed)
-
-    train_path = resolve_path(args.train_data)
-    val_path = resolve_path(args.val_data)
-    output_dir = resolve_path(args.output_dir)
-
-    if not train_path.exists():
-        raise FileNotFoundError(f"Train data tidak ditemukan: {train_path}")
-
-    if not val_path.exists():
-        raise FileNotFoundError(f"Validation data tidak ditemukan: {val_path}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    print("Device:", device)
-    print("Model:", args.model_name)
-    print("Train data:", train_path)
-    print("Validation data:", val_path)
-    print("Output directory:", output_dir)
-
-    if device.type == "cpu":
-        print(
-            "\nPERINGATAN: CUDA tidak ditemukan. "
-            "Program tetap dapat berjalan, tetapi LayoutLMv3 akan cukup lambat di CPU.\n"
-        )
-
-    processor = AutoProcessor.from_pretrained(
-        args.model_name,
-        apply_ocr=False
+def create_optimizer(model, training_config):
+    parameter_groups = (
+        {
+            "params": model.backbone.parameters(),
+            "lr": training_config["backbone_learning_rate"],
+        },
+        {
+            "params": list(model.confidence_adapter.parameters())
+            + list(model.qa_head.parameters()),
+            "lr": training_config["new_layers_learning_rate"],
+        },
+    )
+    return AdamW(
+        parameter_groups,
+        weight_decay=training_config["weight_decay"],
     )
 
+def main():
+    config = load_config("configs/layoutlmv3.yaml")
+    model_config = config["model"]
+    data_config = config["data"]
+    preprocessing_config = config["preprocessing"]
+    training_config = config["training"]
+
+    set_seed(training_config["seed"])
+    train_path = resolve_path(data_config["train_path"])
+    val_path = resolve_path(data_config["val_path"])
+    output_dir = resolve_path(training_config["output_dir"])
+    resume_value = training_config.get("resume_from")
+    resume_path = resolve_path(resume_value) if resume_value else None
+    model_source = resume_path or model_config["pretrained_model"]
+
+    for path in (train_path, val_path):
+        if not path.exists():
+            raise FileNotFoundError(f"Input training tidak ditemukan: {path}")
+    if resume_path is not None and not resume_path.exists():
+        raise FileNotFoundError(f"Checkpoint tidak ditemukan: {resume_path}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    processor = AutoProcessor.from_pretrained(
+        model_source,
+        apply_ocr=False,
+    )
+    dataset_arguments = {
+        "processor": processor,
+        "max_length": model_config["max_length"],
+        "max_candidates": preprocessing_config["max_candidates"],
+        "require_candidates": True,
+    }
     train_dataset = SPDocVQADataset(
         json_path=str(train_path),
-        processor=processor,
-        max_length=args.max_length,
-        strict_alignment=True
+        **dataset_arguments,
     )
     val_dataset = SPDocVQADataset(
         json_path=str(val_path),
-        processor=processor,
-        max_length=args.max_length,
-        strict_alignment=True
+        **dataset_arguments,
     )
 
-    print("Jumlah train:", len(train_dataset))
-    print("Jumlah validation:", len(val_dataset))
-
-    inspect_dataset(train_dataset)
-
     collator = LayoutLMv3QACollator()
-
+    num_workers = training_config["num_workers"]
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=training_config["train_batch_size"],
         shuffle=True,
         collate_fn=collator,
-        num_workers=0
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=num_workers > 0,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=training_config["val_batch_size"],
         shuffle=False,
         collate_fn=collator,
-        num_workers=0
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=num_workers > 0,
     )
 
-    model = build_model(args.model_name)
-    model.to(device)
-
-    optimizer = AdamW(
-        model.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay
+    model = build_model(
+        model_path=model_source,
+        adapter_size=model_config["adapter_size"],
+        confidence_size=model_config["confidence_size"],
+        dropout=model_config["dropout"],
+        map_location=device,
+    )
+    optimizer = create_optimizer(model, training_config)
+    accumulation_steps = training_config["gradient_accumulation_steps"]
+    updates_per_epoch = math.ceil(len(train_loader) / accumulation_steps)
+    total_steps = updates_per_epoch * training_config["epochs"]
+    warmup_steps = int(total_steps * training_config["warmup_ratio"])
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
     )
 
-    initial_batch = next(iter(train_loader))
-    initial_batch = move_batch_to_device(initial_batch, device)
+    print("Device:", device)
+    print("Train samples:", len(train_dataset))
+    print("Validation samples:", len(val_dataset))
+    print("Model source:", model_source)
 
-    model.eval()
-
-    with torch.no_grad():
-        initial_outputs = model(**initial_batch)
-
-    print("\nForward-pass test berhasil.")
-    print("Initial loss:", initial_outputs.loss.item())
-    print("Start logits shape:", tuple(initial_outputs.start_logits.shape))
-    print("End logits shape:", tuple(initial_outputs.end_logits.shape))
-
-    model.train()
-    optimizer.zero_grad()
-
-    optimizer_step = 0
-    recent_losses = []
-    progress = tqdm(
-        total=args.max_steps,
-        desc="Smoke training"
-    )
-
-    while optimizer_step < args.max_steps:
-        for batch_index, batch in enumerate(train_loader):
-            batch = move_batch_to_device(batch, device)
-
-            outputs = model(**batch)
-            raw_loss = outputs.loss
-            scaled_loss = raw_loss / args.gradient_accumulation_steps
-
-            scaled_loss.backward()
-            recent_losses.append(raw_loss.item())
-
-            is_accumulation_boundary = (batch_index + 1) % args.gradient_accumulation_steps == 0
-            is_last_batch = batch_index + 1 == len(train_loader)
-
-            if is_accumulation_boundary or is_last_batch:
-                clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                optimizer.step()
-                optimizer.zero_grad()
-
-                optimizer_step += 1
-                average_recent_loss = sum(recent_losses) / len(recent_losses)
-                recent_losses = []
-
-                progress.set_postfix(loss=f"{average_recent_loss:.4f}")
-                progress.update(1)
-
-                if optimizer_step >= args.max_steps:
-                    break
-
-    progress.close()
-
-    validation_loss = validate(
+    trainer = LayoutLMv3Trainer(
         model=model,
-        data_loader=val_loader,
+        processor=processor,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        train_loader=train_loader,
+        val_loader=val_loader,
         device=device,
-        maximum_batches=args.validation_batches
+        output_dir=str(output_dir),
+        epochs=training_config["epochs"],
+        gradient_accumulation_steps=accumulation_steps,
+        max_grad_norm=training_config["max_grad_norm"],
+        mixed_precision=training_config["mixed_precision"],
+        early_stopping_patience=training_config["early_stopping_patience"],
+        early_stopping_min_delta=training_config["early_stopping_min_delta"],
     )
-
-    print("\nSmoke training selesai.")
-    print("Validation loss    :", validation_loss)
-
-    model.save_pretrained(output_dir)
-    processor.save_pretrained(output_dir)
-
-    report = {
-        "status": "success",
-        "model_name": args.model_name,
-        "device": str(device),
-        "train_samples": len(train_dataset),
-        "validation_samples": len(val_dataset),
-        "batch_size": args.batch_size,
-        "max_length": args.max_length,
-        "optimizer_steps": optimizer_step,
-        "gradient_accumulation_steps": args.gradient_accumulation_steps,
-        "learning_rate": args.learning_rate,
-        "validation_loss": validation_loss,
-        "checkpoint_directory": str(output_dir)
-    }
-
-    report_path = output_dir / "smoke_training_report.json"
-
-    with report_path.open("w", encoding="utf-8") as file:
-        json.dump(report, file, indent=2, ensure_ascii=False)
-
-    print("Checkpoint:", output_dir)
-    print("Training report:", report_path)
+    if resume_path:
+        trainer.load_training_state(str(resume_path))
+    trainer.fit()
 
 if __name__ == "__main__":
     main()
