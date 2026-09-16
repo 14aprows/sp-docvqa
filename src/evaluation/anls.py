@@ -1,4 +1,4 @@
-from src.evaluation.exact_match import normalize_text
+from src.preprocessing.text_normalization import normalize_text
 
 def levenshtein_distance(first_text: str, second_text: str) -> int:
     if len(first_text) < len(second_text):

@@ -1,9 +1,4 @@
-import re 
-
-def normalize_text(text: str) -> str:
-    text = str(text).lower().strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
+from src.preprocessing.text_normalization import normalize_text
 
 def exact_match(prediction: str, ground_truth: str) -> float:
     prediction = normalize_text(prediction)

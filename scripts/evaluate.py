@@ -3,231 +3,201 @@ import json
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
 
 import torch
+import yaml
 from tqdm import tqdm
 from transformers import AutoProcessor
 
 ROOT = Path(__file__).resolve().parents[1]
-
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.evaluation.evaluator import evaluate_prediction
-from src.evaluation.iou import union_boxes
+from src.evaluation.evaluator import evaluate_prediction, summarize_metrics
 from src.inference.predictor import LayoutLMv3QAPredictor
 from src.models.model import build_model
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluasi checkpoint LayoutLMv3 untuk SP-DocVQA."
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default="outputs/checkpoints/layoutlmv3_spdocvqa/best"
-    )
-    parser.add_argument(
-        "--data",
-        type=str,
-        default="data/processed/val_sample.json"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="outputs/evaluation/layoutlmv3_spdocvqa"
-    )
-    parser.add_argument(
-        "--max-length",
-        type=int,
-        default=512
-    )
-    parser.add_argument(
-        "--max-answer-tokens",
-        type=int,
-        default=30
-    )
-    parser.add_argument(
-        "--max-samples",
-        type=int,
-        default=None
-    )
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/layoutlmv3.yaml")
+    parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--data", default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--max-questions", type=int, default=None)
     return parser.parse_args()
 
-def resolve_path(path_value: str) -> Path:
+def resolve_path(path_value):
     path = Path(path_value)
+    return path if path.is_absolute() else ROOT / path
 
-    if path.is_absolute():
-        return path
+def load_config(path_value):
+    with resolve_path(path_value).open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
 
-    return ROOT / path
+def load_records(path):
+    if not path.exists():
+        raise FileNotFoundError(f"Data evaluasi tidak ditemukan: {path}")
+    with path.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        return payload["data"]
+    if isinstance(payload, list):
+        return payload
+    raise ValueError(f"Format data evaluasi tidak valid: {path}")
 
-def load_records(json_path: Path) -> List[Dict]:
-    if not json_path.exists():
-        raise FileNotFoundError(f"Data evaluasi tidak ditemukan: {json_path}")
+def get_question_types(record):
+    values = record.get("question_types") or ["unknown"]
+    if isinstance(values, str):
+        values = [values]
+    return [str(value) for value in values] or ["unknown"]
 
-    with json_path.open("r", encoding="utf-8") as file:
-        data = json.load(file)
+def unique_boxes(boxes):
+    unique = []
+    seen = set()
+    for box in boxes:
+        key = tuple(box)
+        if key not in seen:
+            seen.add(key)
+            unique.append(box)
+    return unique
 
-    if isinstance(data, list):
-        return data
+def get_pseudo_ground_truth_boxes(records):
+    boxes = []
+    for record in records:
+        boxes.extend(record.get("candidate_pseudo_ground_truth_boxes_normalized", []))
+        if not record.get("candidate_pseudo_ground_truth_boxes_normalized"):
+            boxes.extend(
+                candidate["box_normalized"]
+                for candidate in record.get("candidate_spans", [])
+            )
+    return unique_boxes(boxes)
 
-    if isinstance(data, dict) and "data" in data:
-        return data["data"]
-
-    raise ValueError("Format JSON tidak dikenali.")
-
-def get_ground_truth_answers(record: Dict) -> List[str]:
-    answers = record.get("answers")
-
-    if isinstance(answers, list) and answers:
-        return [str(answer) for answer in answers]
-
-    return [str(record.get("answer", ""))]
-
-def get_ground_truth_bbox(record: Dict) -> List[int]:
-    start_word = int(record["answer_start_word"])
-    end_word = int(record["answer_end_word"])
-    answer_boxes = record["boxes"][start_word:end_word + 1]
-
-    return union_boxes(answer_boxes)
-
-def get_question_type(record: Dict) -> str:
-    question_type = record.get(
-        "question_type",
-        record.get("question_types", "unknown")
+def select_best_prediction(predictions):
+    return max(
+        predictions,
+        key=lambda prediction: (
+            prediction["span_score"]
+            if prediction["span_score"] is not None
+            else float("-inf")
+        ),
     )
-
-    if isinstance(question_type, list):
-        return " | ".join(str(item) for item in question_type)
-
-    return str(question_type)
-
-def calculate_average(items: List[Dict], metric_name: str) -> float:
-    if not items:
-        return 0.0
-
-    return sum(item[metric_name] for item in items) / len(items)
 
 def main():
     args = parse_args()
+    config = load_config(args.config)
+    model_config = config["model"]
+    inference_config = config["inference"]
+    evaluation_config = config["evaluation"]
 
-    checkpoint_path = resolve_path(args.checkpoint)
-    data_path = resolve_path(args.data)
-    output_dir = resolve_path(args.output_dir)
-
+    checkpoint_path = resolve_path(
+        args.checkpoint or evaluation_config["checkpoint_path"]
+    )
+    data_path = resolve_path(args.data or config["data"]["val_eval_path"])
+    output_dir = resolve_path(args.output_dir or evaluation_config["output_dir"])
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint tidak ditemukan: {checkpoint_path}")
 
-    records = load_records(data_path)
-
-    if args.max_samples is not None:
-        records = records[:args.max_samples]
-
-    if not records:
-        raise ValueError("Tidak ada data yang dievaluasi.")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    grouped_records = defaultdict(list)
+    for record in load_records(data_path):
+        grouped_records[str(record["question_id"])].append(record)
+    if args.max_questions is not None:
+        grouped_records = dict(list(grouped_records.items())[:args.max_questions])
+    if not grouped_records:
+        raise ValueError("Tidak ada pertanyaan untuk dievaluasi.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    print("Device:", device)
-    print("Checkpoint:", checkpoint_path)
-    print("Data:", data_path)
-    print("Jumlah sampel:", len(records))
-
     processor = AutoProcessor.from_pretrained(
         checkpoint_path,
-        apply_ocr=False
+        apply_ocr=False,
+        local_files_only=True,
     )
-    model = build_model(str(checkpoint_path))
+    model = build_model(checkpoint_path, map_location=device)
     predictor = LayoutLMv3QAPredictor(
         model=model,
         processor=processor,
         device=device,
-        max_length=args.max_length,
-        max_answer_tokens=args.max_answer_tokens
+        max_length=model_config["max_length"],
+        max_answer_tokens=inference_config["max_answer_tokens"],
+        top_k=inference_config["top_k"],
     )
 
     predictions = []
-    metrics_by_type = defaultdict(list)
+    results_by_type = defaultdict(list)
+    results_by_ambiguity = defaultdict(list)
+    for question_id, question_records in tqdm(
+        grouped_records.items(),
+        desc="Evaluasi per pertanyaan",
+    ):
+        window_predictions = []
+        for record in question_records:
+            prediction_record = dict(record)
+            prediction_record["image_path"] = str(resolve_path(record["image_path"]))
+            window_predictions.append(predictor.predict(prediction_record))
 
-    for record in tqdm(records, desc="Evaluasi"):
-        prediction_record = dict(record)
-        prediction_record["image_path"] = str(resolve_path(record["image_path"]))
-        prediction = predictor.predict(prediction_record)
-
-        ground_truth_answers = get_ground_truth_answers(record)
-        ground_truth_bbox = get_ground_truth_bbox(record)
+        best_prediction = select_best_prediction(window_predictions)
+        representative = question_records[0]
+        pseudo_ground_truth_boxes = get_pseudo_ground_truth_boxes(question_records)
         metrics = evaluate_prediction(
-            predicted_answer=prediction["answer"],
-            ground_truth_answers=ground_truth_answers,
-            predicted_bbox=prediction["bbox"],
-            ground_truth_bbox=ground_truth_bbox
+            predicted_answer=best_prediction["answer"],
+            ground_truth_answers=representative.get("answers", []),
+            predicted_bbox=best_prediction["bbox_normalized"],
+            pseudo_ground_truth_bboxes=pseudo_ground_truth_boxes,
         )
-        question_type = get_question_type(record)
+        question_types = get_question_types(representative)
+        is_ambiguous = bool(representative.get("is_ambiguous"))
 
         result = {
-            "question_id": record.get("question_id"),
-            "question": record["question"],
-            "question_type": question_type,
-            "ground_truth_answers": ground_truth_answers,
-            "predicted_answer": prediction["answer"],
-            "ground_truth_bbox": ground_truth_bbox,
-            "predicted_bbox": prediction["bbox"],
-            "predicted_start_word": prediction["start_word"],
-            "predicted_end_word": prediction["end_word"],
-            "span_score": prediction["span_score"],
-            "exact_match": metrics["exact_match"],
-            "anls": metrics["anls"],
-            "iou": metrics["iou"],
-            "image_path": record["image_path"]
+            "question_id": question_id,
+            "question": representative["question"],
+            "question_types": question_types,
+            "image_path": representative["image_path"],
+            "ground_truth_answers": representative.get("answers", []),
+            "pseudo_ground_truth_boxes_normalized": pseudo_ground_truth_boxes,
+            "is_ambiguous": is_ambiguous,
+            "evaluated_window_count": len(question_records),
+            "predicted_answer": best_prediction["answer"],
+            "predicted_bbox_normalized": best_prediction["bbox_normalized"],
+            "predicted_start_token": best_prediction["start_token"],
+            "predicted_end_token": best_prediction["end_token"],
+            "predicted_start_word": best_prediction["start_word"],
+            "predicted_end_word": best_prediction["end_word"],
+            "predicted_global_start_word": best_prediction["global_start_word"],
+            "predicted_global_end_word": best_prediction["global_end_word"],
+            "selected_window_index": best_prediction["window_index"],
+            "span_score": best_prediction["span_score"],
+            "gate_values": best_prediction["gate_values"],
+            **metrics,
         }
-
         predictions.append(result)
-        metrics_by_type[question_type].append(metrics)
+        for question_type in question_types:
+            results_by_type[question_type].append(result)
+        ambiguity_group = "ambiguous" if is_ambiguous else "non_ambiguous"
+        results_by_ambiguity[ambiguity_group].append(result)
 
-    overall = {
-        "sample_count": len(predictions),
-        "exact_match": calculate_average(predictions, "exact_match"),
-        "anls": calculate_average(predictions, "anls"),
-        "iou": calculate_average(predictions, "iou")
-    }
-    per_question_type = {
-        question_type: {
-            "sample_count": len(values),
-            "exact_match": calculate_average(values, "exact_match"),
-            "anls": calculate_average(values, "anls"),
-            "iou": calculate_average(values, "iou")
-        }
-        for question_type, values in metrics_by_type.items()
-    }
     summary = {
+        "pipeline": config["pipeline"]["name"],
         "checkpoint": str(checkpoint_path),
         "dataset": str(data_path),
-        "overall": overall,
-        "per_question_type": per_question_type
+        "overall": summarize_metrics(predictions),
+        "per_question_type": {
+            question_type: summarize_metrics(results)
+            for question_type, results in sorted(results_by_type.items())
+        },
+        "ambiguity_statistics": {
+            group: summarize_metrics(results_by_ambiguity[group])
+            for group in ("ambiguous", "non_ambiguous")
+        },
     }
 
-    predictions_path = output_dir / "predictions.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    predictions_path = output_dir / "predictions_per_question.json"
     summary_path = output_dir / "evaluation_summary.json"
-
     with predictions_path.open("w", encoding="utf-8") as file:
         json.dump(predictions, file, indent=2, ensure_ascii=False)
-
     with summary_path.open("w", encoding="utf-8") as file:
         json.dump(summary, file, indent=2, ensure_ascii=False)
 
-    print("\n" + "=" * 60)
-    print("HASIL EVALUASI")
-    print("=" * 60)
-    print("Jumlah sampel:", overall["sample_count"])
-    print("Exact Match:", f'{overall["exact_match"]:.4f}')
-    print("ANLS:", f'{overall["anls"]:.4f}')
-    print("IoU:", f'{overall["iou"]:.4f}')
-    print("=" * 60)
+    print(json.dumps(summary["overall"], indent=2, ensure_ascii=False))
     print("Predictions:", predictions_path)
     print("Summary:", summary_path)
 
