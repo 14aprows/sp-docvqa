@@ -18,7 +18,7 @@ def visualize_prediction(
     destination_path = Path(output_path)
 
     if not source_path.exists():
-        raise FileNotFoundError(f"Gambar tidak ditemukan: {source_path}")
+        raise FileNotFoundError(f"Image not found: {source_path}")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -28,14 +28,14 @@ def get_records_key(payload):
         if key in payload:
             if isinstance(payload[key], list):
                 return key
-    raise KeyError(f"List anotasi tidak ditemukan. Field tersedia: {list(payload.keys())}")
+    raise KeyError(f"Annotation list not found. Available fields: {list(payload.keys())}")
 
 def get_doc_id(record):
     doc_id = (
         record.get("docId") or record.get("doc_id") or record.get("document_id") or record.get("image") or record.get("image_name")
     )
     if doc_id is None:
-        raise KeyError(f"Doc ID tidak ditemukan: {record}")
+        raise KeyError(f"Document ID not found: {record}")
     return Path(str(doc_id)).stem
 
 def get_candidate_names(record):
@@ -186,7 +186,7 @@ def process_split(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Membuat subset sample SP-DocVQA"
+        description="Create a small SP-DocVQA sample."
     )
     parser.add_argument(
         "--train-size",
@@ -230,7 +230,7 @@ def main():
     report_path = project_root / "data" / "samples" / "sample_report.json"
     save_json(report, report_path)
 
-    print("\nSample selesai dibuat.")
+    print("\nSample creation finished.")
     print(f"Report: {report_path}")
 
 if __name__ == "__main__":

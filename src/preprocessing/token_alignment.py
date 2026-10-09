@@ -7,11 +7,11 @@ def find_token_span(
     answer_end_word: int
 ) -> Tuple[Optional[int], Optional[int]]:
     if len(word_ids) != len(sequence_ids):
-        raise ValueError("Jumlah word_ids dan sequence_ids harus sama")
+        raise ValueError("word_ids and sequence_ids must have the same length.")
     if answer_start_word < 0:
-        raise ValueError("answer_start_word tidak boleh negatif")
+        raise ValueError("answer_start_word cannot be negative.")
     if answer_end_word < answer_start_word:
-        raise ValueError("answer_end_word harus lebih besar atau sama dengan answer_start_word")
+        raise ValueError("answer_end_word must be at least answer_start_word.")
 
     start_candidates = []
     end_candidates = []

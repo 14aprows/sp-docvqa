@@ -5,7 +5,6 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
-import yaml
 from tqdm import tqdm
 from transformers import AutoProcessor
 
@@ -16,34 +15,27 @@ if str(ROOT) not in sys.path:
 from src.evaluation.evaluator import evaluate_prediction, summarize_metrics
 from src.inference.predictor import LayoutLMv3QAPredictor
 from src.models.model import build_model
+from src.utils.config import load_config, resolve_path
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/layoutlmv3.yaml")
+    parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--data", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-questions", type=int, default=None)
     return parser.parse_args()
 
-def resolve_path(path_value):
-    path = Path(path_value)
-    return path if path.is_absolute() else ROOT / path
-
-def load_config(path_value):
-    with resolve_path(path_value).open("r", encoding="utf-8") as file:
-        return yaml.safe_load(file)
-
 def load_records(path):
     if not path.exists():
-        raise FileNotFoundError(f"Data evaluasi tidak ditemukan: {path}")
+        raise FileNotFoundError(f"Evaluation data not found: {path}")
     with path.open("r", encoding="utf-8") as file:
         payload = json.load(file)
     if isinstance(payload, dict) and isinstance(payload.get("data"), list):
         return payload["data"]
     if isinstance(payload, list):
         return payload
-    raise ValueError(f"Format data evaluasi tidak valid: {path}")
+    raise ValueError(f"Invalid evaluation data format: {path}")
 
 def get_question_types(record):
     values = record.get("question_types") or ["unknown"]
@@ -95,7 +87,7 @@ def main():
     data_path = resolve_path(args.data or config["data"]["val_eval_path"])
     output_dir = resolve_path(args.output_dir or evaluation_config["output_dir"])
     if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint tidak ditemukan: {checkpoint_path}")
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     grouped_records = defaultdict(list)
     for record in load_records(data_path):
@@ -103,7 +95,7 @@ def main():
     if args.max_questions is not None:
         grouped_records = dict(list(grouped_records.items())[:args.max_questions])
     if not grouped_records:
-        raise ValueError("Tidak ada pertanyaan untuk dievaluasi.")
+        raise ValueError("No questions to evaluate.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     processor = AutoProcessor.from_pretrained(
@@ -126,7 +118,7 @@ def main():
     results_by_ambiguity = defaultdict(list)
     for question_id, question_records in tqdm(
         grouped_records.items(),
-        desc="Evaluasi per pertanyaan",
+        desc="Evaluate questions",
     ):
         window_predictions = []
         for record in question_records:

@@ -5,6 +5,7 @@ from typing import Optional
 
 import torch
 from torch import nn
+from safetensors.torch import load_file, save_file
 
 from src.models.layoutlmv3.backbone import LayoutLMv3Backbone
 from src.models.layoutlmv3.confidence_adapter import ConfidenceAdapter
@@ -85,7 +86,7 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
         )
         provided_candidate_values = [value is not None for value in candidate_values]
         if any(provided_candidate_values) and not all(provided_candidate_values):
-            raise ValueError("Seluruh tensor candidate_* harus diberikan bersama sama")
+            raise ValueError("All candidate_* tensors must be provided together.")
 
         loss = None
         if all(provided_candidate_values):
@@ -117,12 +118,12 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         self.backbone.save_pretrained(output_dir / "backbone")
-        torch.save(
-            self.confidence_adapter.state_dict(),
-            output_dir / "confidence_adapter.pt"
-        )
-        torch.save(self.qa_head.state_dict(), output_dir / "qa_head.pt")
-        torch.save(self.state_dict(), output_dir / "model_state.pt")
+        state_dict = {
+            name: tensor.detach().cpu().contiguous().clone()
+            for name, tensor in self.state_dict().items()
+            if not name.startswith("backbone.")
+        }
+        save_file(state_dict, output_dir / "model.safetensors")
         with (output_dir / "adapter_config.json").open("w", encoding="utf-8") as file:
             json.dump(self.checkpoint_config(), file, indent=2, ensure_ascii=False)
 
@@ -132,7 +133,7 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
         config_path = checkpoint_dir / "adapter_config.json"
         backbone_path = checkpoint_dir / "backbone"
         if not config_path.exists() or not backbone_path.exists():
-            raise FileNotFoundError(f"Checkpoint model final tidak lengkap: {checkpoint_dir}")
+            raise FileNotFoundError(f"Model checkpoint is incomplete: {checkpoint_dir}")
 
         with config_path.open("r", encoding="utf-8") as file:
             config = json.load(file)
@@ -144,8 +145,16 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
             dropout=config["dropout"]
         )
 
+        safe_state_path = checkpoint_dir / "model.safetensors"
         model_state_path = checkpoint_dir / "model_state.pt"
-        if model_state_path.exists():
+        if safe_state_path.exists():
+            missing, unexpected = model.load_state_dict(
+                load_file(safe_state_path, device="cpu"),
+                strict=False
+            )
+            if unexpected or any(not name.startswith("backbone.") for name in missing):
+                raise ValueError(f"Model weights are incomplete: {safe_state_path}")
+        elif model_state_path.exists():
             state_dict = torch.load(
                 model_state_path,
                 map_location=map_location,

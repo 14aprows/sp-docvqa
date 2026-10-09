@@ -79,17 +79,17 @@ def extract_page_words(page):
             if word_record is not None:
                 words.append(word_record)
 
-        if words:
-            return words
+    if words:
+        return words
 
-        for word_index, word in enumerate(page.get("words", [])):
-            word_record = create_word_create(
-                word,
-                None,
-                word_index
-            )
-            if word_record is not None:
-                words.append(word_record)
+    for word_index, word in enumerate(page.get("words", [])):
+        word_record = create_word_create(
+            word,
+            None,
+            word_index
+        )
+        if word_record is not None:
+            words.append(word_record)
                 
     return words
 
@@ -97,7 +97,7 @@ def load_ocr(path):
     payload = load_json(path)
     pages = get_ocr_pages(payload)
     if not pages:
-        raise ValueError(f"Tidak menemukan halaman OCR: {path}")
+        raise ValueError(f"No OCR pages found: {path}")
 
     page = pages[0]
     width = page.get("width")

@@ -28,7 +28,7 @@ def get_records(payload):
     for key in possible_keys:
         if isinstance(payload.get(key), list):
             return payload[key]
-    raise KeyError(f"List anotasi tidak ditemukan. Field tersedia: {list(payload.keys())}")
+    raise KeyError(f"Annotation list not found. Available fields: {list(payload.keys())}")
 
 def get_question(record):
     return str(record.get("question") or record.get("questions") or "").strip()

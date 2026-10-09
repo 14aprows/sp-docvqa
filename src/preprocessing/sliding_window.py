@@ -3,7 +3,7 @@ def validate_candidates(candidates, word_count):
         start_word = candidate["start_word"]
         end_word = candidate["end_word"]
         if not 0 <= start_word <= end_word < word_count:
-            raise ValueError(f"Indeks kandidat tidak valid: start={start_word}, end={end_word}, jumlah_word={word_count}")
+            raise ValueError(f"Invalid candidate indices: start={start_word}, end={end_word}, word_count={word_count}")
 
 def create_word_windows(
     words,
@@ -15,15 +15,15 @@ def create_word_windows(
     positive_only=True
 ):
     if len(words) != len(boxes):
-        raise ValueError("Jumlah words dan boxes harus sama")
+        raise ValueError("words and boxes must have the same length.")
     if len(words) != len(confidence_labels):
-        raise ValueError("Jumlah words dan confidence_labels harus sama")
+        raise ValueError("words and confidence_labels must have the same length.")
     if max_words <= 0:
-        raise ValueError("max_words harus lebih besar dari 0")
+        raise ValueError("max_words must be greater than 0.")
     if stride <= 0:
-        raise ValueError("stride harus lebih besar dari 0")
+        raise ValueError("stride must be greater than 0.")
     if stride >= max_words:
-        raise ValueError("stride harus lebih kecil dari max_words")
+        raise ValueError("stride must be less than max_words.")
     if not words:
         return []
 

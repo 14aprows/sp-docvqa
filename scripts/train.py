@@ -1,3 +1,4 @@
+import argparse
 import math
 import random
 import sys
@@ -5,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor, get_linear_schedule_with_warmup
@@ -18,20 +18,16 @@ from src.data.collator import LayoutLMv3QACollator
 from src.data.dataset import SPDocVQADataset
 from src.models.model import build_model
 from src.training.trainer import LayoutLMv3Trainer
+from src.utils.config import load_config, resolve_path
 
-def resolve_path(path_value):
-    path = Path(path_value)
-    return path if path.is_absolute() else ROOT / path
-
-def load_config(path_value):
-    path = resolve_path(path_value)
-    if not path.exists():
-        raise FileNotFoundError(f"Config tidak ditemukan: {path}")
-    with path.open("r", encoding="utf-8") as file:
-        config = yaml.safe_load(file)
-    if not isinstance(config, dict):
-        raise ValueError(f"Config tidak valid: {path}")
-    return config
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to the YAML config file",
+    )
+    return parser.parse_args()
 
 def set_seed(seed):
     random.seed(seed)
@@ -58,7 +54,8 @@ def create_optimizer(model, training_config):
     )
 
 def main():
-    config = load_config("configs/layoutlmv3.yaml")
+    args = parse_args()
+    config = load_config(args.config)
     model_config = config["model"]
     data_config = config["data"]
     preprocessing_config = config["preprocessing"]
@@ -74,9 +71,9 @@ def main():
 
     for path in (train_path, val_path):
         if not path.exists():
-            raise FileNotFoundError(f"Input training tidak ditemukan: {path}")
+            raise FileNotFoundError(f"Training input not found: {path}")
     if resume_path is not None and not resume_path.exists():
-        raise FileNotFoundError(f"Checkpoint tidak ditemukan: {resume_path}")
+        raise FileNotFoundError(f"Checkpoint not found: {resume_path}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     processor = AutoProcessor.from_pretrained(

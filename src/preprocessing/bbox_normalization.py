@@ -16,7 +16,7 @@ def normalize_box(
     target_size=1000
 ):
     if image_width <= 0 or image_height <= 0:
-        raise ValueError("Ukuran gambar harus lebih besar dari 0")
+        raise ValueError("Image size must be greater than 0.")
 
     x1, y1, x2, y2 = box
     normalized = [

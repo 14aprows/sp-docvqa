@@ -18,7 +18,7 @@ def build_token_level_features(
     attention_mask
 ):
     if len(word_ids) != len(sequence_ids):
-        raise ValueError("Jumlah word_ids dan sequence_ids harus sama")
+        raise ValueError("word_ids and sequence_ids must have the same length.")
 
     confidence_ids = torch.zeros(len(word_ids), dtype=torch.long)
     question_mask = torch.zeros(len(word_ids), dtype=torch.long)
@@ -33,7 +33,7 @@ def build_token_level_features(
         if sequence_id != 1 or word_id is None:
             continue
         if not 0 <= word_id < len(confidence_labels):
-            raise ValueError(f"word_id di luar confidence_labels: {word_id}")
+            raise ValueError(f"word_id is outside confidence_labels: {word_id}")
 
         document_mask[token_index] = 1
         confidence_ids[token_index] = 2 if is_low_confidence_label(confidence_labels[word_id]) else 1
@@ -56,7 +56,7 @@ class SPDocVQADataset(Dataset):
         self.require_candidates = require_candidates
 
         if not self.json_path.exists():
-            raise FileNotFoundError(f"File dataset tidak ditemukan: {self.json_path}")
+            raise FileNotFoundError(f"Dataset file not found: {self.json_path}")
         
         with self.json_path.open("r", encoding="utf-8") as file:
             payload = json.load(file)
@@ -68,14 +68,14 @@ class SPDocVQADataset(Dataset):
             self.records = payload["data"]
             payload_max_candidates = int(payload.get("max_candidates", 20))
         else:
-            raise ValueError("Format JSON harus berupa list atau dictionary yang memiliki key 'data'.")
+            raise ValueError("JSON must be a list or a dictionary with a 'data' key.")
 
         if not self.records:
-            raise ValueError(f"Dataset kosong: {self.json_path}")
+            raise ValueError(f"Dataset is empty: {self.json_path}")
 
         self.max_candidates = max_candidates or payload_max_candidates
         if self.max_candidates <= 0:
-            raise ValueError("max_candidates harus lebih besar dari 0")
+            raise ValueError("max_candidates must be greater than 0.")
 
     def __len__(self) -> int:
         return len(self.records)
@@ -117,10 +117,10 @@ class SPDocVQADataset(Dataset):
         if self.require_candidates and not valid_candidates:
             record_id = record.get("id")
             question_id = record.get("question_id")
-            raise ValueError(f"Sample tidak memiliki kandidat token valid: id={record_id}, question_id={question_id}")
+            raise ValueError(f"Sample has no valid token candidates: id={record_id}, question_id={question_id}")
         if valid_candidates and weights[mask].sum().item() <= 0:
             record_id = record.get("id")
-            raise ValueError(f"Bobot kandidat harus positif: id={record_id}")
+            raise ValueError(f"Candidate weight must be positive: id={record_id}")
 
         return starts, ends, weights, mask, valid_candidates
 
@@ -130,7 +130,7 @@ class SPDocVQADataset(Dataset):
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
         image_path = self._resolve_image_path(record["image_path"])
         if not image_path.exists():
-            raise FileNotFoundError(f"File gambar tidak ditemukan: {image_path}")
+            raise FileNotFoundError(f"Image file not found: {image_path}")
 
         question = str(record["question"])
         words = record["words"]
@@ -138,7 +138,7 @@ class SPDocVQADataset(Dataset):
         confidence_labels = record["confidence_labels"]
         if not len(words) == len(boxes) == len(confidence_labels):
             record_id = record.get("id")
-            raise ValueError(f"Panjang words, boxes, dan confidence_labels berbeda: id={record_id}")
+            raise ValueError(f"words, boxes, and confidence_labels have different lengths: id={record_id}")
 
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")

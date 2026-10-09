@@ -11,7 +11,7 @@ def multi_span_loss(
 ):
     candidate_mask = candidate_mask.bool()
     if torch.any(candidate_mask.sum(dim=1) == 0):
-        raise ValueError("Setiap sampel harus memiliki minimal satu kandidat valid")
+        raise ValueError("Each sample must have at least one valid candidate.")
 
     sequence_length = start_logits.size(1)
     valid_positions = (
@@ -21,7 +21,7 @@ def multi_span_loss(
         candidate_end_positions.lt(sequence_length)
     )
     if torch.any(candidate_mask & ~valid_positions):
-        raise ValueError("Posisi kandidat berada di luar sequence model")
+        raise ValueError("Candidate position is outside the model sequence.")
 
     start_log_probabilities = F.log_softmax(start_logits, dim=-1)
     end_log_probabilities = F.log_softmax(end_logits, dim=-1)
@@ -39,7 +39,7 @@ def multi_span_loss(
     masked_weights = candidate_weights.to(start_logits.dtype) * candidate_mask
     weight_sum = masked_weights.sum(dim=1, keepdim=True)
     if torch.any(weight_sum <= 0):
-        raise ValueError("Jumlah bobot kandidat valid harus positif")
+        raise ValueError("Valid candidate weights must add up to a positive value.")
     
     normalized_weights = masked_weights / weight_sum
 

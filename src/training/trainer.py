@@ -109,7 +109,7 @@ class LayoutLMv3Trainer:
             )
 
         if batch_count == 0:
-            raise ValueError("Train DataLoader kosong.")
+            raise ValueError("Training DataLoader is empty.")
 
         return total_loss / batch_count
 
@@ -139,7 +139,7 @@ class LayoutLMv3Trainer:
             progress.set_postfix(loss=f"{loss.item():.4f}")
 
         if batch_count == 0:
-            raise ValueError("Validation DataLoader kosong.")
+            raise ValueError("Validation DataLoader is empty.")
 
         return total_loss / batch_count
 
@@ -183,7 +183,7 @@ class LayoutLMv3Trainer:
         state_path = Path(checkpoint_dir) / "training_state.pt"
 
         if not state_path.exists():
-            raise FileNotFoundError(f"Training state tidak ditemukan: {state_path}")
+            raise FileNotFoundError(f"Training state not found: {state_path}")
 
         checkpoint = torch.load(state_path, map_location=self.device)
 
@@ -209,11 +209,11 @@ class LayoutLMv3Trainer:
     def fit(self):
         self.model.to(self.device)
 
-        print("\nTraining dimulai")
+        print("\nTraining started")
         print("Device:", self.device)
         print("Start epoch:", self.start_epoch)
         print("Total epoch:", self.epochs)
-        print("AMP aktif:", self.use_amp)
+        print("AMP enabled:", self.use_amp)
 
         for epoch in range(self.start_epoch, self.epochs + 1):
             train_loss = self.train_epoch(epoch)
@@ -253,9 +253,9 @@ class LayoutLMv3Trainer:
             print("=" * 60)
 
             if should_stop:
-                print("\nEarly stopping aktif. Training dihentikan.")
+                print("\nEarly stopping triggered. Training stopped.")
                 break
 
-        print("\nTraining selesai.")
+        print("\nTraining finished.")
         print("Best checkpoint:", self.output_dir / "best")
         print("Last checkpoint:", self.output_dir / "last")

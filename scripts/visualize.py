@@ -23,7 +23,7 @@ ERROR_CATEGORIES = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualisasi hasil prediksi dan analisis kesalahan SP-DocVQA."
+        description="Show SP-DocVQA predictions and errors."
     )
     parser.add_argument(
         "--predictions",
@@ -59,13 +59,13 @@ def resolve_path(path_value: str) -> Path:
 
 def load_predictions(predictions_path: Path) -> List[Dict]:
     if not predictions_path.exists():
-        raise FileNotFoundError(f"Predictions tidak ditemukan: {predictions_path}")
+        raise FileNotFoundError(f"Predictions not found: {predictions_path}")
 
     with predictions_path.open("r", encoding="utf-8") as file:
         predictions = json.load(file)
 
     if not isinstance(predictions, list):
-        raise ValueError("Format predictions harus berupa list.")
+        raise ValueError("Predictions must be a list.")
 
     return predictions
 
@@ -77,7 +77,7 @@ def main():
     args = parse_args()
 
     if args.limit < 0:
-        raise ValueError("Limit tidak boleh negatif.")
+        raise ValueError("Limit cannot be negative.")
 
     predictions_path = resolve_path(args.predictions)
     output_dir = resolve_path(args.output_dir)
@@ -117,7 +117,7 @@ def main():
             ground_truth_answer=ground_truth_answers[0] if ground_truth_answers else ""
         )
 
-    print(f"{len(predictions)} visualisasi disimpan di {output_dir}")
+    print(f"Saved {len(predictions)} visualizations to {output_dir}")
 
 if __name__ == "__main__":
     main()

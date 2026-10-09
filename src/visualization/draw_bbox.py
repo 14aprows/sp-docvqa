@@ -93,7 +93,7 @@ def denormalize_box(
     image_height: int
 ) -> List[int]:
     if len(box) != 4:
-        raise ValueError("Bounding box harus memiliki 4 koordinat")
+        raise ValueError("Bounding box must have 4 coordinates.")
     x_min = round(box[0] / 1000 * image_width)
     y_min = round(box[1] / 1000 * image_height)
     x_max = round(box[2] / 1000 * image_width)

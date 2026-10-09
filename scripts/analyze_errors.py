@@ -13,7 +13,7 @@ from src.evaluation.error_analysis import analyze_errors
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Analisis kesalahan hasil prediksi SP-DocVQA."
+        description="Analyze SP-DocVQA prediction errors."
     )
     parser.add_argument(
         "--predictions",
@@ -48,13 +48,13 @@ def resolve_path(path_value: str) -> Path:
 
 def load_predictions(predictions_path: Path) -> List[Dict]:
     if not predictions_path.exists():
-        raise FileNotFoundError(f"Predictions tidak ditemukan: {predictions_path}")
+        raise FileNotFoundError(f"Predictions not found: {predictions_path}")
 
     with predictions_path.open("r", encoding="utf-8") as file:
         predictions = json.load(file)
 
     if not isinstance(predictions, list):
-        raise ValueError("Format predictions harus berupa list.")
+        raise ValueError("Predictions must be a list.")
 
     return predictions
 
@@ -62,17 +62,17 @@ def main():
     args = parse_args()
 
     if not 0 <= args.iou_threshold <= 1:
-        raise ValueError("IoU threshold harus berada di antara 0 dan 1.")
+        raise ValueError("IoU threshold must be between 0 and 1.")
 
     if not 0 <= args.anls_threshold <= 1:
-        raise ValueError("ANLS threshold harus berada di antara 0 dan 1.")
+        raise ValueError("ANLS threshold must be between 0 and 1.")
 
     predictions_path = resolve_path(args.predictions)
     output_dir = resolve_path(args.output_dir)
     predictions = load_predictions(predictions_path)
 
     if not predictions:
-        raise ValueError("Tidak ada prediction yang dianalisis.")
+        raise ValueError("No predictions to analyze.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,9 +92,9 @@ def main():
         json.dump(summary, file, indent=2, ensure_ascii=False)
 
     print("\n" + "=" * 60)
-    print("HASIL ANALISIS KESALAHAN")
+    print("ERROR ANALYSIS RESULTS")
     print("=" * 60)
-    print("Jumlah data:", summary["total_samples"])
+    print("Total samples:", summary["total_samples"])
 
     for category, count in summary["category_counts"].items():
         percentage = summary["category_percentages"][category]

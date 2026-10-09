@@ -1,5 +1,5 @@
 pipeline:
-  name: Question-Conditioned OCR Confidence Adaptation with Confidence-Weighted Multi-Candidate Supervision for SP-DocVQA Answer Localization
+  name: SP-DocVQA for LayoutLMv3 sample
 
 data:
   train_annotation_path: data/samples/annotations/train_sample.json
@@ -8,31 +8,36 @@ data:
   val_image_dir: data/samples/images/val
   train_ocr_dir: data/samples/ocr/train
   val_ocr_dir: data/samples/ocr/val
-  train_path: data/processed/train_sample.json
-  val_path: data/processed/val_sample.json
-  val_eval_path: data/processed/val_eval_sample.json
+  train_path: data/samples/processed/train_sample.json
+  val_path: data/samples/processed/val_sample.json
+  val_eval_path: data/samples/processed/val_eval_sample.json
 
 preprocessing:
-  max_words: 180
-  stride: 80
+  max_words: 100
+  stride: 50
   fuzzy_threshold: 0.85
   span_tolerance: 2
   max_answer_words: 15
   max_candidates: 20
   low_confidence_penalty: 0.20
 
+  train_positive_only: true
+  val_positive_only: true
+  val_eval_positive_only: false
+
 model:
   pretrained_model: microsoft/layoutlmv3-base
+  local_files_only: false
   max_length: 512
   adapter_size: 256
   confidence_size: 32
   dropout: 0.1
 
 training:
-  output_dir: outputs/checkpoints/layoutlmv3
+  output_dir: outputs/checkpoints/layoutlmv3_sample
   resume_from: null
   seed: 42
-  epochs: 10
+  epochs: 100
   train_batch_size: 2
   val_batch_size: 2
   gradient_accumulation_steps: 4
@@ -43,7 +48,7 @@ training:
   max_grad_norm: 1.0
   mixed_precision: true
   num_workers: 0
-  early_stopping_patience: 3
+  early_stopping_patience: 20
   early_stopping_min_delta: 0.001
 
 inference:
@@ -51,5 +56,9 @@ inference:
   top_k: 20
 
 evaluation:
-  checkpoint_path: outputs/checkpoints/layoutlmv3/best
-  output_dir: outputs/evaluation/layoutlmv3
+  checkpoint_path: outputs/checkpoints/layoutlmv3_sample/best
+  output_dir: outputs/evaluation/layoutlmv3_sample
+
+logging:
+  history_path: outputs/logs/layoutlmv3_sample.json
+  plot_dir: outputs/visualizations/layoutlmv3_sample

@@ -1,0 +1,73 @@
+pipeline:
+  name: SP-DocVQA for LayoutLMv3 
+
+data:
+  train_annotation_path: data/raw/annotations/train_v1.0_withQT.json
+  val_annotation_path: data/raw/annotations/val_v1.0_withQT.json
+  train_image_dir: data/raw/images
+  val_image_dir: data/raw/images
+  train_ocr_dir: data/raw/ocr
+  val_ocr_dir: data/raw/ocr
+  train_path: data/processed/train.json
+  val_path: data/processed/val.json
+  val_eval_path: data/processed/val_eval.json
+
+preprocessing:
+  max_words: 100
+  stride: 50
+  fuzzy_threshold: 0.85
+  span_tolerance: 2
+  max_answer_words: 15
+  max_candidates: 20
+  low_confidence_penalty: 0.20
+  
+  train_positive_only: true
+  val_positive_only: true
+  val_eval_positive_only: false
+
+model:
+  pretrained_model: microsoft/layoutlmv3-base
+  local_files_only: false
+  max_length: 512
+  adapter_size: 256
+  confidence_size: 32
+  dropout: 0.1
+
+training:
+  output_dir: outputs/checkpoints/layoutlmv3_full
+  resume_from: null
+  seed: 42
+  epochs: 100
+  train_batch_size: 2
+  val_batch_size: 2
+  gradient_accumulation_steps: 4
+  backbone_learning_rate: 0.00001
+  new_layers_learning_rate: 0.00005
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  max_grad_norm: 1.0
+  mixed_precision: true
+  num_workers: 0
+  early_stopping_patience: 20
+  early_stopping_min_delta: 0.001
+
+grid_search:
+  step1_lr:
+    learning_rate: [0.000001, 0.00001, 0.0001]
+  step2_regularization:
+    dropout: [0.05, 0.15, 0.3]
+    weight_decay: [0.0, 0.01, 0.1]
+  step3_window:
+    window_pairs: [[100, 50], [160, 60], [200, 100]]
+
+inference:
+  max_answer_tokens: 30
+  top_k: 20
+
+evaluation:
+  checkpoint_path: outputs/checkpoints/layoutlmv3_full/best
+  output_dir: outputs/evaluation/layoutlmv3_full
+
+logging:
+  history_path: outputs/logs/layoutlmv3_full.json
+  plot_dir: outputs/visualizations/layoutlmv3_full

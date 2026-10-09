@@ -70,14 +70,14 @@ class LayoutLMv3QAPredictor:
     def predict(self, record: Dict[str, Any]) -> Dict[str, Any]:
         image_path = Path(record["image_path"])
         if not image_path.exists():
-            raise FileNotFoundError(f"Gambar tidak ditemukan: {image_path}")
+            raise FileNotFoundError(f"Image not found: {image_path}")
 
         words = record["words"]
         boxes = record["boxes"]
         confidence_labels = record["confidence_labels"]
         if not len(words) == len(boxes) == len(confidence_labels):
             record_id = record.get("id")
-            raise ValueError(f"Feature word tidak sejajar: id={record_id}")
+            raise ValueError(f"Word features are not aligned: id={record_id}")
 
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")
