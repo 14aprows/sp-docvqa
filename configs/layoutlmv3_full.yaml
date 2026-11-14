@@ -37,7 +37,7 @@ training:
   output_dir: outputs/checkpoints/layoutlmv3_full
   resume_from: null
   seed: 42
-  epochs: 100
+  epochs: 15
   train_batch_size: 2
   val_batch_size: 2
   gradient_accumulation_steps: 4
@@ -48,7 +48,7 @@ training:
   max_grad_norm: 1.0
   mixed_precision: true
   num_workers: 0
-  early_stopping_patience: 20
+  early_stopping_patience: 4
   early_stopping_min_delta: 0.001
 
 grid_search:
