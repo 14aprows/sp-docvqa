@@ -25,7 +25,9 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
         model_path,
         adapter_size=256,
         confidence_size=32,
-        dropout=0.1
+        dropout=0.1,
+        use_oca=True,
+        use_mcs=True
     ):
         super().__init__()
         self.adapter_size = adapter_size
@@ -33,13 +35,18 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
         self.dropout_probability = dropout
         self.backbone = LayoutLMv3Backbone(model_path)
         hidden_size = self.backbone.hidden_size
-        self.confidence_adapter = ConfidenceAdapter(
-            hidden_size=hidden_size,
-            adapter_size=adapter_size,
-            confidence_size=confidence_size,
-            dropout=dropout
-        )
+        self.confidence_adapter = None
+        self.use_oca = use_oca
+        self.use_mcs = use_mcs
         self.qa_head = QAHead(hidden_size=hidden_size, dropout=dropout)
+
+        if self.use_oca:
+            self.confidence_adapter = ConfidenceAdapter(
+                hidden_size=hidden_size,
+                adapter_size=adapter_size,
+                confidence_size=confidence_size,
+                dropout=dropout
+            )
 
     def forward(
         self,
@@ -65,45 +72,55 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids
         )
-        adapted_hidden_states, gate_values = self.confidence_adapter(
-            hidden_states=hidden_states,
-            bbox=bbox,
-            confidence_ids=confidence_ids,
-            question_mask=question_mask,
-            document_mask=document_mask
-        )
-        start_logits, end_logits = self.qa_head(adapted_hidden_states)
 
+        gate_values = hidden_states.new_zeros(document_mask.shape)
+
+        if self.use_oca:
+            hidden_states, gate_values = self.confidence_adapter(
+                hidden_states=hidden_states,
+                bbox=bbox,
+                confidence_ids=confidence_ids,
+                question_mask=question_mask,
+                document_mask=document_mask
+            )
+
+        start_logits, end_logits = self.qa_head(hidden_states)
         invalid_positions = ~document_mask.bool()
         start_logits = start_logits.masked_fill(invalid_positions, -10000.0)
         end_logits = end_logits.masked_fill(invalid_positions, -10000.0)
 
-        candidate_values = (
-            candidate_start_positions,
-            candidate_end_positions,
-            candidate_weights,
-            candidate_mask
-        )
-        provided_candidate_values = [value is not None for value in candidate_values]
-        if any(provided_candidate_values) and not all(provided_candidate_values):
-            raise ValueError("All candidate_* tensors must be provided together.")
-
         loss = None
-        if all(provided_candidate_values):
-            loss = multi_span_loss(
-                start_logits=start_logits,
-                end_logits=end_logits,
-                candidate_start_positions=candidate_start_positions,
-                candidate_end_positions=candidate_end_positions,
-                candidate_weights=candidate_weights,
-                candidate_mask=candidate_mask
+        if self.use_mcs:
+            candidate_values = (
+                candidate_start_positions,
+                candidate_end_positions,
+                candidate_weights,
+                candidate_mask
             )
+
+            if all(value is not None for value in candidate_values):
+                loss = multi_span_loss(
+                    start_logits=start_logits,
+                    end_logits=end_logits,
+                    candidate_start_positions=candidate_start_positions,
+                    candidate_end_positions=candidate_end_positions,
+                    candidate_weights=candidate_weights,
+                    candidate_mask=candidate_mask
+                )
+            elif any(value is not None for value in candidate_values):
+                raise ValueError("All candidate tensors must be provided together.")
+        elif start_positions is not None and end_positions is not None:
+            start_loss = nn.functional.cross_entropy(start_logits, start_positions)
+            end_loss = nn.functional.cross_entropy(end_logits, end_positions)
+            loss = (start_loss + end_loss) / 2
+        elif start_positions is not None or end_positions is not None:
+            raise ValueError("Start and end positions must be provided together.")
 
         return LayoutLMv3QAOutput(
             loss=loss,
             start_logits=start_logits,
             end_logits=end_logits,
-            gate_values=gate_values
+            gate_values=gate_values,
         )
 
     def checkpoint_config(self):
@@ -111,7 +128,9 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
             "hidden_size": self.backbone.hidden_size,
             "adapter_size": self.adapter_size,
             "confidence_size": self.confidence_size,
-            "dropout": self.dropout_probability
+            "dropout": self.dropout_probability,
+            "use_oca": self.use_oca,
+            "use_mcs": self.use_mcs
         }
 
     def save_pretrained(self, output_dir):
@@ -142,7 +161,9 @@ class LayoutLMv3ForAnswerLocalization(nn.Module):
             model_path=backbone_path,
             adapter_size=config["adapter_size"],
             confidence_size=config["confidence_size"],
-            dropout=config["dropout"]
+            dropout=config["dropout"],
+            use_oca=config.get("use_oca", True),
+            use_mcs=config.get("use_mcs", True)
         )
 
         safe_state_path = checkpoint_dir / "model.safetensors"

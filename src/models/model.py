@@ -6,7 +6,9 @@ def build_model(
     adapter_size=256,
     confidence_size=32,
     dropout=0.1,
-    map_location="cpu"
+    map_location="cpu",
+    use_oca=True,
+    use_mcs=True
 ):
     source_path = Path(model_path)
     if source_path.exists() and (source_path / "adapter_config.json").exists():
@@ -19,5 +21,7 @@ def build_model(
         model_path=model_path,
         adapter_size=adapter_size,
         confidence_size=confidence_size,
-        dropout=dropout
+        dropout=dropout,
+        use_oca=use_oca,
+        use_mcs=use_mcs
     )

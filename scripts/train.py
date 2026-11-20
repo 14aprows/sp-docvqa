@@ -37,14 +37,17 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 def create_optimizer(model, training_config):
+    new_layer_parameters = list(model.qa_head.parameters())
+    if model.confidence_adapter is not None:
+        new_layer_parameters += list(model.confidence_adapter.parameters())
+        
     parameter_groups = (
         {
-            "params": model.backbone.parameters(),
+            "params": new_layer_parameters,
             "lr": training_config["backbone_learning_rate"],
         },
         {
-            "params": list(model.confidence_adapter.parameters())
-            + list(model.qa_head.parameters()),
+            "params": new_layer_parameters,
             "lr": training_config["new_layers_learning_rate"],
         },
     )
@@ -122,6 +125,8 @@ def main():
         confidence_size=model_config["confidence_size"],
         dropout=model_config["dropout"],
         map_location=device,
+        use_oca=model_config.get("use_oca", True),
+        use_mcs=model_config.get("use_mcs", True)
     )
     optimizer = create_optimizer(model, training_config)
     accumulation_steps = training_config["gradient_accumulation_steps"]
