@@ -32,6 +32,8 @@ model:
   adapter_size: 256
   confidence_size: 32
   dropout: 0.1
+  use_oca: false
+  use_mcs: false
 
 training:
   output_dir: outputs/checkpoints/layoutlmv3_full
@@ -52,13 +54,27 @@ training:
   early_stopping_min_delta: 0.001
 
 grid_search:
-  step1_lr:
-    learning_rate: [0.000001, 0.00001, 0.0001]
-  step2_regularization:
+  epochs: 5
+  patience: 2
+  learning_rate: [0.00001, 0.0001, 0.001]
+
+  preprocessing:
+    window_pairs: [[100, 50], [150, 60], [200, 100]]
+    fuzzy_threshold: [0.85]
+    span_tolerance: [2]
+    max_answer_words: [15]
+    max_candidates: [20]
+    low_confidence_penalty: [0.2]
+  
+  model:
     dropout: [0.05, 0.15, 0.3]
-    weight_decay: [0.0, 0.01, 0.1]
-  step3_window:
-    window_pairs: [[100, 50], [160, 60], [200, 100]]
+    # oca_size_pairs: [[128, 16], [256, 32]]
+  
+  training:
+    weight_decay: [0.01, 0.1]
+    warmup_ratio: [0.1]
+    max_grad_norm: [1.0]
+    early_stopping_min_delta: [0.001]
 
 inference:
   max_answer_tokens: 30
