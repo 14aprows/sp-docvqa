@@ -43,7 +43,7 @@ def create_optimizer(model, training_config):
         
     parameter_groups = (
         {
-            "params": new_layer_parameters,
+            "params": model.backbone.parameters(),
             "lr": training_config["backbone_learning_rate"],
         },
         {
