@@ -1,8 +1,10 @@
 import copy
+import csv
 import json
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from itertools import product
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -43,7 +45,7 @@ def main():
 
     combinations = list(product(*(values for _, _, values in parameters)))
     if not combinations:
-        raise ValueError("Each grad list needs at least one value")
+        raise ValueError("Each grid list needs at least one value")
 
     use_oca = base_config["model"].get("use_oca", True)
     use_mcs = base_config["model"].get("use_mcs", True)
@@ -57,20 +59,45 @@ def main():
 
     config_name = config_names[(use_oca, use_mcs)]
     output_dir = ROOT / "outputs" / "grid_search" / config_name
-    output_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     best_dir = output_dir / "best_model"
+    results_path = output_dir / "results.csv"
+    run_config_path = output_dir / "grid_config.yaml"
+    run_config = {
+        "base_config": base_config,
+        "grid": grid,
+        "parameter_order": [[section, name] for section, name, _ in parameters]
+    }
 
     prepared_data = {}
     rows = []
     best_score = None
 
+    if run_config_path.is_file():
+        with run_config_path.open("r", encoding="utf-8") as file:
+            if yaml.safe_load(file) != run_config:
+                raise ValueError("Grid config changed. Use the original config or a new output folder.")
+
+    if results_path.is_file():
+        with results_path.open("r", encoding="utf-8-sig", newline="") as file:
+            rows = list(csv.DictReader(file))
+
+    completed_trials = {row["trial"] for row in rows}
+    best_path = output_dir / "best.json"
+    if best_path.is_file() and best_dir.is_dir():
+        best = read_json(best_path)
+        best_score = (float(best["anls"]), -float(best["best_validation_loss"]))
+    elif rows:
+        raise FileNotFoundError(f"Restore best.json and best_model in {output_dir} before resuming.")
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    pending_trials = []
+
     print(f"Total trials: {len(combinations)}")
 
     for index, combination in enumerate(combinations, start=1):
         trial_dir = output_dir / f"trial_{index:03d}"
-        trial_dir.mkdir()
         trial_config = copy.deepcopy(base_config)
-        row = {"trial": trial_dir.name}
 
         for (section, name, _), value in zip(parameters, combination):
             if name == "learning_rate":
@@ -83,17 +110,52 @@ def main():
                 trial_config["model"]["adapter_size"] = value[0]
                 trial_config["model"]["confidence_size"] = value[1]
             else:
-                trial_config[section][name] = value      
+                trial_config[section][name] = value
 
         trial_config["training"]["epochs"] = grid["epochs"]
         trial_config["training"]["early_stopping_patience"] = grid["patience"]
         trial_config["training"]["resume_from"] = None
 
         data_key = tuple(sorted(trial_config["preprocessing"].items()))
+
+        if trial_dir.name in completed_trials:
+            with (trial_dir / "config.yaml").open("r", encoding="utf-8") as file:
+                saved_config = yaml.safe_load(file)
+            for section in ("preprocessing", "model", "training", "inference"):
+                for name, value in trial_config[section].items():
+                    if name != "output_dir" and saved_config[section].get(name) != value:
+                        raise ValueError(f"Config changed for {trial_dir.name}. Use a new output folder.")
+
+            for name, value in trial_config["data"].items():
+                if name not in ("train_path", "val_path", "val_eval_path") and saved_config["data"].get(name) != value:
+                    raise ValueError(f"Data config changed for {trial_dir.name}. Use a new output folder.")
+
+            data_paths = {
+                name: saved_config["data"][name]
+                for name in ("train_path", "val_path", "val_eval_path")
+            }
+            if all((ROOT / path).is_file() for path in data_paths.values()):
+                prepared_data[data_key] = data_paths
+            continue
+
+        pending_trials.append((index, trial_dir, trial_config, data_key))
+
+    if not run_config_path.is_file():
+        pending_config_path = output_dir / "grid_config.tmp"
+        save_config(run_config, pending_config_path)
+        pending_config_path.replace(run_config_path)
+    print(f"Completed trials: {len(completed_trials)}")
+
+    for index, trial_dir, trial_config, data_key in pending_trials:
+        if trial_dir.exists():
+            trial_dir.rename(output_dir / f"{trial_dir.name}_interrupted_{run_id}")
+
+        trial_dir.mkdir()
+        row = {"trial": trial_dir.name}
         needs_preprocessing = data_key not in prepared_data
         if needs_preprocessing:
             number = len(prepared_data) + 1
-            prefix = f"data/processed/{config_name}_{number:02d}"
+            prefix = f"data/processed/{config_name}_{run_id}_{number:02d}"
             prepared_data[data_key] = {
                 "train_path": f"{prefix}_train.json",
                 "val_path": f"{prefix}_val.json",
@@ -159,7 +221,9 @@ def main():
                     json.dump(row, file, indent=2)
 
             rows.append(row)
-            save_results(rows, output_dir / "results.csv")
+            pending_results_path = output_dir / "results.tmp"
+            save_results(rows, pending_results_path)
+            pending_results_path.replace(results_path)
 
     print("Results:", output_dir / "results.csv")
     print("Best model:", best_dir)
