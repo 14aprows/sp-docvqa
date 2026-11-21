@@ -40,9 +40,9 @@ training:
   resume_from: null
   seed: 42
   epochs: 15
-  train_batch_size: 2
+  train_batch_size: 8
   val_batch_size: 2
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 1
   backbone_learning_rate: 0.00001
   new_layers_learning_rate: 0.00005
   weight_decay: 0.01
@@ -56,10 +56,10 @@ training:
 grid_search:
   epochs: 5
   patience: 2
-  learning_rate: [0.00001, 0.0001, 0.001]
+  learning_rate: [0.00001, 0.00003]
 
   preprocessing:
-    window_pairs: [[100, 50], [150, 60], [200, 100]]
+    window_pairs: [[100, 50], [150, 60]]
     fuzzy_threshold: [0.85]
     span_tolerance: [2]
     max_answer_words: [15]
@@ -67,12 +67,12 @@ grid_search:
     low_confidence_penalty: [0.2]
   
   model:
-    dropout: [0.05, 0.15, 0.3]
+    dropout: [0.05, 0.10]
     # oca_size_pairs: [[128, 16], [256, 32]]
   
   training:
-    weight_decay: [0.01, 0.1]
-    warmup_ratio: [0.1]
+    weight_decay: [0.001, 0.01]
+    warmup_ratio: [0.048]
     max_grad_norm: [1.0]
     early_stopping_min_delta: [0.001]
 
